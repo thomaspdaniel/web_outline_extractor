@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Website Outline Extractor
 
@@ -1019,25 +1020,27 @@ Output modes:
         
         # Always save JSON for AI consumption
         base_filename = url_to_filename(target_url)
-        json_filename = f"{base_filename}_headings.json"
+        # Ensure files are created in current working directory (where script was called from)
+        current_dir = os.getcwd()
+        json_filename = os.path.join(current_dir, f"{base_filename}_headings.json")
         save_headings_json(headings, json_filename, target_url)
         
         # Choose output format based on flags
         if use_full_webpage:
             # Full webpage mode - enhanced webpage with copy buttons
             # Use cached raw HTML for efficiency
-            full_filename = f"{base_filename}_modified.html"
+            full_filename = os.path.join(current_dir, f"{base_filename}_modified.html")
             save_headings_full_html(headings, full_filename, target_url, raw_html)
             print(f"\nOutput formats: Enhanced full webpage + JSON")
             print(f"Enhanced webpage: {full_filename}")
         elif use_markdown:
             # Markdown mode - outline in markdown format
-            md_filename = f"{base_filename}_headings.md"
+            md_filename = os.path.join(current_dir, f"{base_filename}_headings.md")
             save_headings_markdown(headings, md_filename, target_url)
             print(f"\nOutput formats: Markdown outline + JSON")
         else:
             # Default mode - outline in HTML format
-            html_filename = f"{base_filename}_headings.html"
+            html_filename = os.path.join(current_dir, f"{base_filename}_headings.html")
             save_headings_html(headings, html_filename, target_url)
             print(f"\nOutput formats: HTML outline + JSON (use -md for Markdown, -full for enhanced webpage)")
         
