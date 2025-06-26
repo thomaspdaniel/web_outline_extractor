@@ -861,12 +861,16 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                     
                     # Create inline style tag with proper media attribute preservation
                     style_tag = soup.new_tag('style')
+                    style_tag['type'] = 'text/css'
                     
                     # Preserve media queries and other attributes
                     if css_link.get('media'):
                         style_tag['media'] = css_link.get('media')
                     
                     css_content = css_response.text
+                    
+                    # Clean up CSS content to prevent text rendering issues
+                    css_content = css_content.strip()
                     
                     # Resolve any @import statements in the CSS
                     import_pattern = r'@import\s+(?:url\()?["\']?([^)"\'\s]+)["\']?\)?[^;]*;'
@@ -885,8 +889,16 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                         except Exception as e:
                             print(f"    Failed to import CSS {import_url}: {e}")
                     
-                    style_tag.string = css_content
-                    css_link.replace_with(style_tag)
+                    # Use text content instead of string to avoid HTML escaping issues
+                    style_tag.append(css_content)
+                    
+                    # Insert into head if possible, otherwise replace the link
+                    head = soup.find('head')
+                    if head:
+                        head.append(style_tag)
+                        css_link.decompose()  # Remove the original link
+                    else:
+                        css_link.replace_with(style_tag)
                 except Exception as e:
                     print(f"  Failed to embed CSS {href}: {e}")
                     # Keep the original link as fallback
@@ -903,8 +915,16 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                     css_response.raise_for_status()
                     
                     style_tag = soup.new_tag('style')
-                    style_tag.string = f"/* From {href} */\n{css_response.text}"
-                    link.replace_with(style_tag)
+                    style_tag['type'] = 'text/css'
+                    style_tag.append(f"/* From {href} */\n{css_response.text}")
+                    
+                    # Insert into head if possible
+                    head = soup.find('head')
+                    if head:
+                        head.append(style_tag)
+                        link.decompose()
+                    else:
+                        link.replace_with(style_tag)
                 except Exception as e:
                     print(f"  Failed to embed additional CSS {href}: {e}")
         
@@ -963,7 +983,9 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                             except Exception as e:
                                 print(f"  Failed to embed background image {bg_url}: {e}")
                     
-                    style_tag.string = css_content
+                    # Clear and update the style content properly
+                    style_tag.clear()
+                    style_tag.append(css_content)
                 except Exception as e:
                     print(f"  Error processing CSS backgrounds: {e}")
         
@@ -972,7 +994,8 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
         if head:
             # Add CSS to force proper theme variables and ensure visibility
             theme_fix_css = soup.new_tag('style')
-            theme_fix_css.string = """
+            theme_fix_css['type'] = 'text/css'
+            theme_css_content = """
                 /* Theme and color fixes for offline viewing */
                 html, body {
                     background-color: var(--bg-color, #ffffff) !important;
@@ -1006,6 +1029,7 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                 /* Ensure borders are visible */
                 table, th, td, .border { border-color: var(--border-color, #cccccc); }
                 """
+            theme_fix_css.append(theme_css_content)
             head.append(theme_fix_css)
         
         # Create mapping of heading text to reference keys
@@ -1043,7 +1067,8 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
         if head:
             # Add CSS for copy buttons
             css_style = soup.new_tag('style')
-            css_style.string = """
+            css_style['type'] = 'text/css'
+            copy_btn_css = """
                 .copy-ref-btn {
                     margin-left: 8px !important;
                     padding: 2px 6px !important;
@@ -1065,11 +1090,13 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                     background: #004085 !important;
                 }
                 """
+            css_style.append(copy_btn_css)
             head.append(css_style)
             
             # Add JavaScript for clipboard functionality
             js_script = soup.new_tag('script')
-            js_script.string = """
+            js_script['type'] = 'text/javascript'
+            js_content = """
                 function copyToClipboard(text) {
                     if (navigator.clipboard && window.isSecureContext) {
                         navigator.clipboard.writeText(text).then(function() {
@@ -1097,6 +1124,7 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                     }
                 }
                 """
+            js_script.append(js_content)
             head.append(js_script)
         
         # Save the complete enhanced HTML
