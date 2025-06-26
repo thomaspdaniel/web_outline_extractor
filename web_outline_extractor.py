@@ -859,13 +859,54 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                     css_response = requests.get(css_url, timeout=30)
                     css_response.raise_for_status()
                     
-                    # Create inline style tag
+                    # Create inline style tag with proper media attribute preservation
                     style_tag = soup.new_tag('style')
-                    style_tag.string = css_response.text
+                    
+                    # Preserve media queries and other attributes
+                    if css_link.get('media'):
+                        style_tag['media'] = css_link.get('media')
+                    
+                    css_content = css_response.text
+                    
+                    # Resolve any @import statements in the CSS
+                    import_pattern = r'@import\s+(?:url\()?["\']?([^)"\'\s]+)["\']?\)?[^;]*;'
+                    imports = re.finditer(import_pattern, css_content, re.IGNORECASE)
+                    
+                    for import_match in imports:
+                        import_url = import_match.group(1)
+                        try:
+                            full_import_url = urljoin(css_url, import_url)
+                            print(f"    Downloading @import CSS: {full_import_url}")
+                            import_response = requests.get(full_import_url, timeout=30)
+                            import_response.raise_for_status()
+                            
+                            # Replace @import with the actual CSS content
+                            css_content = css_content.replace(import_match.group(0), f"/* Imported from {import_url} */\n{import_response.text}")
+                        except Exception as e:
+                            print(f"    Failed to import CSS {import_url}: {e}")
+                    
+                    style_tag.string = css_content
                     css_link.replace_with(style_tag)
                 except Exception as e:
                     print(f"  Failed to embed CSS {href}: {e}")
                     # Keep the original link as fallback
+        
+        # Also check for any remaining link tags that might have CSS
+        other_css_links = soup.find_all('link', href=True)
+        for link in other_css_links:
+            href = link.get('href', '')
+            if '.css' in href.lower() or 'stylesheet' in str(link).lower():
+                try:
+                    css_url = urljoin(source_url, href)
+                    print(f"  Downloading additional CSS: {css_url}")
+                    css_response = requests.get(css_url, timeout=30)
+                    css_response.raise_for_status()
+                    
+                    style_tag = soup.new_tag('style')
+                    style_tag.string = f"/* From {href} */\n{css_response.text}"
+                    link.replace_with(style_tag)
+                except Exception as e:
+                    print(f"  Failed to embed additional CSS {href}: {e}")
         
         # Embed images as base64 data URIs
         images = soup.find_all('img')
@@ -925,6 +966,47 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                     style_tag.string = css_content
                 except Exception as e:
                     print(f"  Error processing CSS backgrounds: {e}")
+        
+        # Add CSS to ensure proper color rendering and theme detection
+        head = soup.find('head')
+        if head:
+            # Add CSS to force proper theme variables and ensure visibility
+            theme_fix_css = soup.new_tag('style')
+            theme_fix_css.string = """
+                /* Theme and color fixes for offline viewing */
+                html, body {
+                    background-color: var(--bg-color, #ffffff) !important;
+                    color: var(--text-color, #000000) !important;
+                }
+                
+                /* Ensure dark mode CSS variables are defined if missing */
+                :root {
+                    --bg-color: #ffffff;
+                    --text-color: #000000;
+                    --link-color: #0066cc;
+                    --border-color: #cccccc;
+                }
+                
+                [data-theme="dark"], .dark-mode, .dark {
+                    --bg-color: #1a1a1a;
+                    --text-color: #ffffff;
+                    --link-color: #66ccff;
+                    --border-color: #333333;
+                }
+                
+                /* Fallback colors for elements that might be invisible */
+                * {
+                    color: inherit;
+                }
+                
+                /* Ensure links are visible */
+                a { color: var(--link-color, #0066cc); }
+                a:visited { color: var(--link-color, #0066cc); }
+                
+                /* Ensure borders are visible */
+                table, th, td, .border { border-color: var(--border-color, #cccccc); }
+                """
+            head.append(theme_fix_css)
         
         # Create mapping of heading text to reference keys
         heading_map = {}
