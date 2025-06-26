@@ -820,43 +820,113 @@ def download_full_website(url: str, output_dir: str) -> str:
 
 def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, source_url: str, raw_html: Optional[str] = None) -> bool:
     """
-    Save enhanced full webpage with copy reference buttons.
+    Save enhanced full webpage with copy reference buttons and embedded resources.
     
-    This function either uses provided raw HTML or downloads the complete website 
-    using wget, then modifies the HTML to add copy reference buttons next to each 
-    heading that was identified by the extractor.
+    This function takes the original webpage and creates a complete, self-contained
+    HTML file with all CSS, images, and resources embedded inline, plus adds copy
+    reference buttons next to each heading.
     
     Args:
         headings (List[Dict]): List of heading dictionaries with reference keys
         output_path (str): Path where to save the enhanced webpage
         source_url (str): Original URL that was processed
-        raw_html (Optional[str]): Raw HTML content (if None, will download with wget)
+        raw_html (Optional[str]): Raw HTML content (if None, will download fresh)
         
     Returns:
         bool: True if saved successfully, False otherwise
     """
-    import subprocess
-    import tempfile
-    import shutil
-    from pathlib import Path
+    import base64
+    from urllib.parse import urljoin, urlparse
     
     try:
         if raw_html:
-            # Use provided raw HTML (efficient approach)
             print(f"Using cached HTML content for enhanced webpage...")
             soup = BeautifulSoup(raw_html, 'lxml')
         else:
-            # Fallback to wget download (for backwards compatibility)
-            print(f"No cached HTML provided, downloading with wget...")
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Download complete website
-                main_html_path = download_full_website(source_url, temp_dir)
-                
-                # Read the downloaded HTML file
-                with open(main_html_path, 'r', encoding='utf-8') as f:
-                    soup = BeautifulSoup(f.read(), 'lxml')
+            print(f"Downloading fresh HTML content...")
+            fresh_html, soup = fetch_webpage(source_url)
         
-        # Create mapping of heading text to reference keys for quick lookup
+        print(f"Processing webpage to embed all resources...")
+        
+        # Embed CSS stylesheets inline
+        css_links = soup.find_all('link', {'rel': 'stylesheet'})
+        for css_link in css_links:
+            href = css_link.get('href')
+            if href:
+                try:
+                    css_url = urljoin(source_url, href)
+                    print(f"  Downloading CSS: {css_url}")
+                    css_response = requests.get(css_url, timeout=30)
+                    css_response.raise_for_status()
+                    
+                    # Create inline style tag
+                    style_tag = soup.new_tag('style')
+                    style_tag.string = css_response.text
+                    css_link.replace_with(style_tag)
+                except Exception as e:
+                    print(f"  Failed to embed CSS {href}: {e}")
+                    # Keep the original link as fallback
+        
+        # Embed images as base64 data URIs
+        images = soup.find_all('img')
+        for img in images:
+            src = img.get('src')
+            if src and not src.startswith('data:'):
+                try:
+                    img_url = urljoin(source_url, src)
+                    print(f"  Downloading image: {img_url}")
+                    img_response = requests.get(img_url, timeout=30)
+                    img_response.raise_for_status()
+                    
+                    # Determine image MIME type
+                    content_type = img_response.headers.get('content-type', 'image/png')
+                    
+                    # Convert to base64
+                    img_data = base64.b64encode(img_response.content).decode('utf-8')
+                    data_uri = f"data:{content_type};base64,{img_data}"
+                    
+                    # Replace src with data URI
+                    img['src'] = data_uri
+                except Exception as e:
+                    print(f"  Failed to embed image {src}: {e}")
+                    # Keep the original src as fallback
+        
+        # Embed background images in CSS
+        style_tags = soup.find_all('style')
+        for style_tag in style_tags:
+            if style_tag.string:
+                try:
+                    css_content = style_tag.string
+                    # Find background-image URLs
+                    import re
+                    bg_pattern = r'background-image:\s*url\(["\']?([^)]+)["\']?\)'
+                    matches = re.finditer(bg_pattern, css_content)
+                    
+                    for match in matches:
+                        bg_url = match.group(1)
+                        if not bg_url.startswith('data:'):
+                            try:
+                                full_bg_url = urljoin(source_url, bg_url)
+                                print(f"  Downloading background image: {full_bg_url}")
+                                bg_response = requests.get(full_bg_url, timeout=30)
+                                bg_response.raise_for_status()
+                                
+                                content_type = bg_response.headers.get('content-type', 'image/png')
+                                bg_data = base64.b64encode(bg_response.content).decode('utf-8')
+                                data_uri = f"data:{content_type};base64,{bg_data}"
+                                
+                                # Replace in CSS
+                                css_content = css_content.replace(f'url({bg_url})', f'url({data_uri})')
+                                css_content = css_content.replace(f'url("{bg_url}")', f'url("{data_uri}")')
+                                css_content = css_content.replace(f"url('{bg_url}')", f"url('{data_uri}')")
+                            except Exception as e:
+                                print(f"  Failed to embed background image {bg_url}: {e}")
+                    
+                    style_tag.string = css_content
+                except Exception as e:
+                    print(f"  Error processing CSS backgrounds: {e}")
+        
+        # Create mapping of heading text to reference keys
         heading_map = {}
         for heading_data in headings:
             title = heading_data.get('title', '').strip()
@@ -864,7 +934,7 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
             if title and reference_key:
                 heading_map[title] = reference_key
         
-        # Find and enhance headings in the downloaded HTML
+        # Add copy buttons to headings
         headings_enhanced = 0
         heading_tags = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
         
@@ -882,11 +952,11 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                 copy_button['style'] = "margin-left: 8px; padding: 2px 6px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.8em;"
                 copy_button.string = '📋'
                 
-                # Insert button after the heading
+                # Insert button right after the heading
                 heading_element.insert_after(copy_button)
                 headings_enhanced += 1
         
-        # Add JavaScript for copy functionality to <head>
+        # Add JavaScript and CSS for copy functionality
         head = soup.find('head')
         if head:
             # Add CSS for copy buttons
@@ -903,6 +973,7 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                     font-size: 0.8em !important;
                     opacity: 0.7;
                     transition: opacity 0.2s;
+                    vertical-align: middle;
                 }
                 .copy-ref-btn:hover {
                     opacity: 1 !important;
@@ -928,7 +999,11 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                         // Fallback for older browsers
                         var textArea = document.createElement('textarea');
                         textArea.value = text;
+                        textArea.style.position = 'fixed';
+                        textArea.style.left = '-999999px';
+                        textArea.style.top = '-999999px';
                         document.body.appendChild(textArea);
+                        textArea.focus();
                         textArea.select();
                         try {
                             document.execCommand('copy');
@@ -942,12 +1017,13 @@ def save_headings_full_html(headings: List[Dict[str, Any]], output_path: str, so
                 """
             head.append(js_script)
         
-        # Save the enhanced HTML
+        # Save the complete enhanced HTML
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(str(soup))
         
-        print(f"Enhanced webpage saved to {output_path}")
+        print(f"Complete enhanced webpage saved to {output_path}")
         print(f"Added copy buttons to {headings_enhanced} headings")
+        print(f"Embedded CSS stylesheets and images for offline viewing")
         return True
             
     except Exception as e:
